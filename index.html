@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<!--
+  Wedding Bets — a single-file prop betting app for a wedding.
+
+  Setup:
+    1. Edit the CONFIG block in <script> below (couple names, Airtable creds).
+    2. Create an Airtable base with a table that has three single-line text fields:
+       "Name", "Bet", "Yes/No".
+    3. Generate a personal access token with data.records:write scope on that base.
+    4. Serve this file (e.g. `python3 -m http.server`) or open via file:// — both work.
+
+  Note: the Airtable token is exposed in the client. Use a low-scope token tied to
+  one base only, and rotate it after the wedding.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wedding Bets</title>
+<style>
+  :root {
+    --bg: #fdf6f0;
+    --card: #ffffff;
+    --ink: #3a2f2a;
+    --muted: #8a7a72;
+    --accent: #b76e79;
+    --accent-soft: #f3dfe2;
+    --yes: #6b9e7c;
+    --yes-soft: #dcebe1;
+    --no: #c47d6e;
+    --no-soft: #f1dcd6;
+    --border: #ebd9cf;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 24px 16px 80px;
+    background: var(--bg);
+    color: var(--ink);
+    min-height: 100vh;
+  }
+
+  .wrap {
+    max-width: 680px;
+    margin: 0 auto;
+  }
+
+  header.page {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+
+  header.page h1 {
+    font-size: 2.2rem;
+    margin: 0 0 6px;
+    letter-spacing: 0.5px;
+  }
+
+  header.page p {
+    color: var(--muted);
+    margin: 0;
+    font-style: italic;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(160, 110, 95, 0.06);
+  }
+
+  /* Name entry */
+  #nameScreen {
+    text-align: center;
+    margin-top: 40px;
+  }
+
+  #nameScreen label {
+    display: block;
+    font-size: 1.05rem;
+    margin-bottom: 12px;
+    color: var(--muted);
+  }
+
+  #nameInput {
+    width: 100%;
+    max-width: 320px;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink);
+    margin-bottom: 14px;
+  }
+
+  #nameInput:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 0.95rem;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 16px;
+    cursor: pointer;
+    transition: transform 0.05s ease, opacity 0.15s ease, background 0.15s ease;
+  }
+
+  button:active { transform: translateY(1px); }
+  button:disabled { cursor: default; opacity: 0.55; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) { background: #a45c66; }
+
+  .btn-yes {
+    background: var(--yes-soft);
+    color: var(--yes);
+    border: 1px solid var(--yes);
+    font-weight: 600;
+    min-width: 72px;
+  }
+  .btn-yes:hover:not(:disabled) { background: var(--yes); color: #fff; }
+  .btn-yes.selected { background: var(--yes); color: #fff; }
+
+  .btn-no {
+    background: var(--no-soft);
+    color: var(--no);
+    border: 1px solid var(--no);
+    font-weight: 600;
+    min-width: 72px;
+  }
+  .btn-no:hover:not(:disabled) { background: var(--no); color: #fff; }
+  .btn-no.selected { background: var(--no); color: #fff; }
+
+  .btn-context {
+    background: transparent;
+    color: var(--muted);
+    border: 1px dashed var(--border);
+    font-size: 0.85rem;
+    padding: 6px 12px;
+  }
+  .btn-context:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Bet card */
+  .bet {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .bet-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .bet-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .bet-context {
+    background: var(--accent-soft);
+    color: var(--ink);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    display: none;
+  }
+  .bet-context.show { display: block; }
+
+  .submitted-tag {
+    margin-left: auto;
+    font-size: 0.8rem;
+    color: var(--yes);
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  /* Welcome line */
+  .welcome {
+    text-align: center;
+    color: var(--muted);
+    margin-bottom: 24px;
+    font-size: 1rem;
+  }
+
+  /* Submit bar */
+  #submitBar {
+    position: sticky;
+    bottom: 40px;
+    margin-top: 24px;
+    display: flex;
+    justify-content: center;
+    z-index: 50;
+  }
+  #submitBtn {
+    background: var(--accent);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 14px 28px;
+    border-radius: 999px;
+    box-shadow: 0 6px 18px rgba(183, 110, 121, 0.35);
+    letter-spacing: 0.3px;
+  }
+  #submitBtn:hover:not(:disabled) { background: #a45c66; }
+  #submitBtn:disabled {
+    background: #d8c4c8;
+    box-shadow: none;
+  }
+
+  /* Toast */
+  #toast {
+    position: fixed;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    z-index: 200;
+  }
+  #toast.show { opacity: 0.95; }
+
+  /* Footer */
+  footer.masthead {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    padding: 12px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    letter-spacing: 0.8px;
+    background: linear-gradient(to top, var(--bg), rgba(253, 246, 240, 0));
+  }
+
+  @media (max-width: 480px) {
+    header.page h1 { font-size: 1.7rem; }
+    .bet-title { font-size: 1rem; }
+    button { font-size: 0.9rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="page">
+    <h1 id="title">Wedding Bets</h1>
+    <p id="tagline">Place your wagers. House odds, honor system.</p>
+  </header>
+
+  <!-- Name entry -->
+  <section id="nameScreen" class="card">
+    <label for="nameInput">What's your name?</label>
+    <div>
+      <input id="nameInput" type="text" placeholder="e.g. Aunt Pat" autocomplete="off" />
+    </div>
+    <button id="nameContinue" class="btn-primary">Let's bet</button>
+  </section>
+
+  <!-- Bets list -->
+  <section id="betsScreen" style="display: none;">
+    <p class="welcome" id="welcome"></p>
+    <div id="betsList"></div>
+    <div id="submitBar">
+      <button id="submitBtn" disabled>Submit votes</button>
+    </div>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<footer class="masthead">A Nolan Bock Joint</footer>
+
+<script>
+  // ===== CONFIG — edit these for your wedding =====
+  const BRIDE = "Bride";            // e.g. "Clare"
+  const GROOM = "Groom";            // e.g. "Nolan"
+  const WEDDING_TITLE = "Wedding Bets";
+
+  // Airtable: base must have a table with fields "Name", "Bet", "Yes/No" (all single-line text).
+  // Token needs data.records:write scope on this base only.
+  const AIRTABLE_BASE_ID = "YOUR_BASE_ID";
+  const AIRTABLE_TABLE   = "YOUR_TABLE_ID";
+  const AIRTABLE_TOKEN   = "YOUR_PAT";
+  // =================================================
+
+  const bets = [
+    { title: `Will ${BRIDE} cry at the ceremony?`,
+      context: `Tears of joy count. Tears from the wind do not.` },
+    { title: `Will ${GROOM} cry at the ceremony?`,
+      context: `A single tear that nobody else sees still counts if a credible witness vouches for it.` },
+    { title: `Will ${BRIDE} cry at the reception?`,
+      context: `Crying during a parent dance is the textbook trigger.` },
+    { title: `Will ${GROOM} cry at the reception?`,
+      context: `Speeches, first dance, or the surprise slideshow — many vectors.` },
+    { title: `How long will the first kiss last? (O/U 3 seconds)`,
+      context: `Officiant clears throat = kiss is over. Count starts on contact.` },
+    { title: `Father-of-the-bride speech length (O/U 4 minutes)`,
+      context: `Clock starts when he picks up the mic, stops when he sets it down.` },
+    { title: `Father-of-the-groom speech length (O/U 4 minutes)`,
+      context: `Same rules. Stories about childhood embarrassments tend to inflate the over.` },
+    { title: `Will any parent mention grandchildren in speeches?`,
+      context: `Direct mention only. Knowing glances do not count.` },
+    { title: `Will ${BRIDE} change outfits during the reception?`,
+      context: `Mostly for comfort, occasionally for drama.` },
+    { title: `How quickly will ${GROOM}'s tie come off? (O/U 30 minutes into reception)`,
+      context: `Loosened doesn't count. Fully off and out of sight does.` },
+    { title: `Will anyone attempt the worm?`,
+      context: `An attempt is an attempt. Quality is not graded.` },
+    { title: `Will ${BRIDE} get hoisted in a chair (or crowd-surf)?`,
+      context: `Either counts. Both feet must leave the ground.` },
+    { title: `Will there be broken glass on the dance floor?`,
+      context: `Has to actually shatter. A tipped-over empty doesn't qualify.` },
+    { title: `Will the cake be smashed in anyone's face?`,
+      context: `A gentle dab counts. We are not strict here.` },
+    { title: `Will the bouquet be caught cleanly (one hand)?`,
+      context: `Two-hand catches, scrambles, and floor saves all settle as NO.` },
+    { title: `Will the officiant flub a name or vow line?`,
+      context: `Any noticeable stumble. A quick self-correction still counts.` },
+  ];
+
+  const PICKS_KEY = "wedding_bets_picks_v2";
+  const SUBMITTED_KEY = "wedding_bets_submitted_v2";
+  const NAME_KEY = "wedding_bets_name_v1";
+
+  let userName = "";
+  let picks = loadJSON(PICKS_KEY);        // current selections (editable any time)
+  let submitted = loadJSON(SUBMITTED_KEY); // last posted state — used to dedupe
+
+  function loadJSON(key) {
+    try { return JSON.parse(localStorage.getItem(key)) || {}; }
+    catch { return {}; }
+  }
+
+  function savePicks() { localStorage.setItem(PICKS_KEY, JSON.stringify(picks)); }
+  function saveSubmitted() { localStorage.setItem(SUBMITTED_KEY, JSON.stringify(submitted)); }
+
+  function unsubmittedEntries() {
+    return Object.entries(picks).filter(([t, p]) => submitted[t] !== p);
+  }
+
+  function applyWeddingTitle() {
+    document.getElementById("title").textContent = WEDDING_TITLE;
+    document.title = WEDDING_TITLE;
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => t.classList.remove("show"), 2200);
+  }
+
+  function renderBets() {
+    const list = document.getElementById("betsList");
+    list.innerHTML = "";
+    bets.forEach((bet, i) => {
+      const pick = picks[bet.title];
+      const isSubmitted = pick && submitted[bet.title] === pick;
+      const card = document.createElement("div");
+      card.className = "card bet";
+
+      const title = document.createElement("div");
+      title.className = "bet-title";
+      title.textContent = bet.title;
+      card.appendChild(title);
+
+      const context = document.createElement("div");
+      context.className = "bet-context";
+      context.id = `ctx-${i}`;
+      context.textContent = bet.context;
+      card.appendChild(context);
+
+      const controls = document.createElement("div");
+      controls.className = "bet-controls";
+
+      const yesBtn = document.createElement("button");
+      yesBtn.className = "btn-yes" + (pick === "Yes" ? " selected" : "");
+      yesBtn.textContent = "Yes";
+      yesBtn.addEventListener("click", () => pickBet(bet.title, "Yes"));
+
+      const noBtn = document.createElement("button");
+      noBtn.className = "btn-no" + (pick === "No" ? " selected" : "");
+      noBtn.textContent = "No";
+      noBtn.addEventListener("click", () => pickBet(bet.title, "No"));
+
+      const ctxBtn = document.createElement("button");
+      ctxBtn.className = "btn-context";
+      ctxBtn.textContent = "Context";
+      ctxBtn.addEventListener("click", () => {
+        const c = document.getElementById(`ctx-${i}`);
+        c.classList.toggle("show");
+        ctxBtn.textContent = c.classList.contains("show") ? "Hide context" : "Context";
+      });
+
+      controls.appendChild(yesBtn);
+      controls.appendChild(noBtn);
+      controls.appendChild(ctxBtn);
+
+      if (isSubmitted) {
+        const tag = document.createElement("span");
+        tag.className = "submitted-tag";
+        tag.textContent = "✓ submitted";
+        controls.appendChild(tag);
+      }
+
+      card.appendChild(controls);
+      list.appendChild(card);
+    });
+    updateSubmitBtn();
+  }
+
+  function pickBet(betTitle, choice) {
+    if (picks[betTitle] === choice) {
+      delete picks[betTitle]; // tap same choice again to clear
+    } else {
+      picks[betTitle] = choice;
+    }
+    savePicks();
+    renderBets();
+  }
+
+  function updateSubmitBtn() {
+    const btn = document.getElementById("submitBtn");
+    const count = unsubmittedEntries().length;
+    btn.disabled = count === 0;
+    btn.textContent = count === 0 ? "Submit votes" : `Submit ${count} vote${count === 1 ? "" : "s"}`;
+  }
+
+  async function submitVote(betTitle, pick) {
+    const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${AIRTABLE_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fields: { "Name": userName, "Bet": betTitle, "Yes/No": pick },
+      }),
+    });
+    if (!res.ok) throw new Error(`Airtable ${res.status}`);
+  }
+
+  async function submitAll() {
+    const entries = unsubmittedEntries();
+    if (!entries.length) return;
+    const btn = document.getElementById("submitBtn");
+    btn.disabled = true;
+    btn.textContent = "Submitting…";
+
+    const configured = AIRTABLE_BASE_ID !== "YOUR_BASE_ID" && AIRTABLE_TOKEN !== "YOUR_PAT";
+    const failed = [];
+
+    for (const [betTitle, pick] of entries) {
+      try {
+        if (configured) await submitVote(betTitle, pick);
+        submitted[betTitle] = pick;
+      } catch (err) {
+        console.error(err);
+        failed.push(betTitle);
+      }
+    }
+
+    saveSubmitted();
+    renderBets();
+
+    if (failed.length === 0) {
+      showToast(configured
+        ? `${entries.length} vote${entries.length === 1 ? "" : "s"} submitted!`
+        : `Saved locally (Airtable not configured)`);
+    } else if (failed.length < entries.length) {
+      showToast(`Submitted ${entries.length - failed.length}, ${failed.length} failed`);
+    } else {
+      showToast("Submit failed — try again");
+    }
+  }
+
+  function startBetting(name) {
+    userName = name;
+    localStorage.setItem(NAME_KEY, name);
+    document.getElementById("nameScreen").style.display = "none";
+    document.getElementById("betsScreen").style.display = "block";
+    document.getElementById("welcome").textContent = `Welcome, ${name}. Pick wisely.`;
+    renderBets();
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    applyWeddingTitle();
+
+    const savedName = localStorage.getItem(NAME_KEY);
+    if (savedName) {
+      document.getElementById("nameInput").value = savedName;
+    }
+
+    document.getElementById("nameContinue").addEventListener("click", () => {
+      const name = document.getElementById("nameInput").value.trim();
+      if (!name) {
+        showToast("Enter a name first");
+        return;
+      }
+      startBetting(name);
+    });
+
+    document.getElementById("nameInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("nameContinue").click();
+    });
+
+    document.getElementById("submitBtn").addEventListener("click", submitAll);
+  });
+</script>
+
+</body>
+</html>
